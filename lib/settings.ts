@@ -1,17 +1,18 @@
 import type { Language } from './i18n'
 
 export type BotSettings = {
-  verification: { enabled: boolean; mode: 'math' | 'invite' | 'web' | 'join'; timeout_seconds: number; required_invites: number; web_enabled: boolean; join_chat_id: string }
+  verification: { enabled: boolean; trigger: 'join' | 'first_message'; mode: 'math' | 'invite' | 'web' | 'join'; timeout_seconds: number; required_invites: number; web_enabled: boolean; join_chat_id: string }
   moderation: { max_message_length: number; flood_limit: number; flood_window_seconds: number; duplicate_limit: number; welcome_enabled: boolean; welcome_text: string; rules: string; keywords: string[]; keyword_action: 'delete' | 'warn' | 'mute'; keyword_mode: 'off' | 'exact' | 'ai'; auto_delete_seconds: number }
 }
 export const defaults: BotSettings = {
-  verification: { enabled: true, mode: 'math', timeout_seconds: 300, required_invites: 1, web_enabled: false, join_chat_id: '' },
-  moderation: { max_message_length: 1000, flood_limit: 6, flood_window_seconds: 10, duplicate_limit: 3, welcome_enabled: false, welcome_text: 'Welcome, {name}!', rules: '', keywords: [], keyword_action: 'delete', keyword_mode: 'off', auto_delete_seconds: 0 },
+  verification: { enabled: true, trigger: 'join', mode: 'math', timeout_seconds: 300, required_invites: 1, web_enabled: false, join_chat_id: '' },
+  moderation: { max_message_length: 1000, flood_limit: 6, flood_window_seconds: 10, duplicate_limit: 3, welcome_enabled: false, welcome_text: 'Welcome, {name}!', rules: '', keywords: [], keyword_action: 'delete', keyword_mode: 'off', auto_delete_seconds: 300 },
 }
 export type Section = 'verification' | 'moderation' | 'community' | 'keywords'
 export type Field = { key: keyof BotSettings['verification'] | keyof BotSettings['moderation']; section: Section; kind: 'toggle' | 'number' | 'choice' | 'text' | 'longtext' | 'keywords'; min?: number; max?: number; step?: number; choices?: string[]; label: string }
 export const fields: Field[] = [
   { key:'enabled', section:'verification', kind:'toggle', label:'verification' },
+  { key:'trigger', section:'verification', kind:'choice', choices:['join','first_message'], label:'verificationTrigger' },
   { key:'mode', section:'verification', kind:'choice', choices:['math','invite','web','join'], label:'mode' },
   { key:'timeout_seconds', section:'verification', kind:'number', min:60, max:3600, step:60, label:'timeout' },
   { key:'required_invites', section:'verification', kind:'number', min:1, max:100, step:1, label:'inviteCount' },
@@ -45,6 +46,7 @@ export function normalizeSettings(input: unknown): BotSettings {
   settings.verification.timeout_seconds = clampInteger(settings.verification.timeout_seconds, 60, 3600, 300)
   settings.verification.required_invites = clampInteger(settings.verification.required_invites, 1, 100, 1)
   settings.moderation.auto_delete_seconds = clampInteger(settings.moderation.auto_delete_seconds, 0, 3600, 0)
+  if (!['join','first_message'].includes(settings.verification.trigger)) settings.verification.trigger = 'join'
   if (!['math','invite','web','join'].includes(settings.verification.mode)) settings.verification.mode = 'math'
   if (!['delete','warn','mute'].includes(settings.moderation.keyword_action)) settings.moderation.keyword_action = 'delete'
   if (!['off','exact','ai'].includes(settings.moderation.keyword_mode)) settings.moderation.keyword_mode = 'off'
@@ -62,6 +64,8 @@ export function safeText(value: unknown, fallback: string, max: number) { return
 export function updateSetting(settings: BotSettings, key: Field['key'], value: unknown): BotSettings {
   const next = normalizeSettings(settings)
   if (key === 'keywords') next.moderation.keywords = (Array.isArray(value) ? value : String(value).split(',')).map((v) => String(v).trim()).filter(Boolean).slice(0,100)
+  else if (key==='mode') { next.verification.mode=value as BotSettings['verification']['mode']; if(value==='web') next.verification.web_enabled=true }
+  else if (key==='web_enabled') { next.verification.web_enabled=Boolean(value); if(!value&&next.verification.mode==='web') next.verification.mode='math' }
   else if (key in next.verification) (next.verification as Record<string,unknown>)[key] = value
   else (next.moderation as Record<string,unknown>)[key] = value
   return normalizeSettings(next)

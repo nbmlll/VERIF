@@ -13,10 +13,21 @@ describe('group settings validation',()=>{
     expect(settings.verification.mode).toBe('math')
     expect(settings.moderation.keyword_action).toBe('delete')
   })
+  it('defaults invalid verification triggers to member-join mode',()=>{
+    expect(normalizeSettings({verification:{trigger:'anything'}}).verification.trigger).toBe('join')
+    expect(updateSetting(defaults,'trigger','first_message').verification.trigger).toBe('first_message')
+  })
   it('updates only the requested group setting and normalizes keyword lists',()=>{
     const next=updateSetting(defaults,'keywords',[' sale ','','free gift'])
     expect(next.moderation.keywords).toEqual(['sale','free gift'])
     expect(next.verification).toEqual(defaults.verification)
+  })
+  it('enables web verification when that mode is selected and falls back when disabled',()=>{
+    const web=updateSetting(defaults,'mode','web')
+    expect(web.verification.mode).toBe('web')
+    expect(web.verification.web_enabled).toBe(true)
+    const disabled=updateSetting(web,'web_enabled',false)
+    expect(disabled.verification.mode).toBe('math')
   })
   it('increments message length by a constrained numeric value',()=>{
     const next=updateSetting(defaults,'max_message_length',1010)

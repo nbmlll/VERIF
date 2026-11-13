@@ -1,12 +1,20 @@
+import { timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { clearVerificationLocations, getVerificationLocations } from '@/lib/panel'
 import { tg, deleteMessage } from '@/lib/telegram'
 
 export const runtime='nodejs'
 export const dynamic='force-dynamic'
-export async function GET(request:NextRequest) {
+function isAuthorized(request:NextRequest) {
   const secret=process.env.CRON_SECRET
-  if(!secret||request.headers.get('authorization')!==`Bearer ${secret}`) return NextResponse.json({ok:false},{status:401})
+  if(!secret) return false
+  const provided=Buffer.from(request.headers.get('authorization')||'')
+  const expected=Buffer.from(`Bearer ${secret}`)
+  return provided.length===expected.length&&timingSafeEqual(provided,expected)
+}
+export async function GET(request:NextRequest) {
+  if(!isAuthorized(request)) return NextResponse.json({ok:false},{status:401})
   const origin=process.env.APP_URL?.replace(/\/$/,'') || (process.env.VERCEL_URL?`https://${process.env.VERCEL_URL}`:new URL(request.url).origin)
   const webhookUrl=`${origin}/api/telegram/webhook`
   let webhookRegistered=false
@@ -25,8 +33,15 @@ export async function GET(request:NextRequest) {
     try {
       await tg('banChatMember',{chat_id:session.chat_id,user_id:session.user_id,until_date:Math.floor(Date.now()/1000)+30,revoke_messages:true})
       await tg('unbanChatMember',{chat_id:session.chat_id,user_id:session.user_id,only_if_banned:true})
-      if(session.prompt_message_id) await deleteMessage(session.chat_id,session.prompt_message_id)
-      await db.from('verif_verification_sessions').delete().eq('id',session.id)
+      const locations=await getVerificationLocations(session.user_id,session.id)
+      const prompt=locations.prompt||(session.prompt_message_id?{chat_id:session.chat_id,message_id:session.prompt_message_id}:undefined)
+      for(const location of [prompt,locations.notice]) if(location) {
+        await deleteMessage(location.chat_id,location.message_id)
+        await db.from('verif_scheduled_deletes').delete().eq('chat_id',location.chat_id).eq('message_id',location.message_id)
+      }
+      await clearVerificationLocations(session.user_id,session.id)
+      const {error}=await db.from('verif_verification_sessions').delete().eq('id',session.id)
+      if(error) throw error
       sessionsExpired++
     } catch(error) { console.error('[verif] expired verification cleanup failed',error instanceof Error?error.message:'unknown error') }
   }

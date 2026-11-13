@@ -3,21 +3,65 @@ import { langOf, tr, languageName, type Language, type MessageKey } from './i18n
 import { defaults, fields, normalizeSettings, sectionFields, type BotSettings, type Field, type Section, updateSetting } from './settings'
 import { deleteMessage, editMessage, InlineButton, InlineKeyboard, sendMessage, tg } from './telegram'
 
-export type UiState = { user_id:number; chat_id:number | null; message_id:number | null; edit_key:string | null; language:Language }
+export type UiState = { user_id:number; chat_id:number | null; message_id:number | null; edit_key:string | null; language:Language; state:Record<string,unknown> }
 type GroupRow = { chat_id:number; title:string; language:Language; settings:unknown }
 type Screen = 'home' | Section | 'language' | 'field' | 'groups'
 const sectionNames: Record<Section, MessageKey> = { verification:'verification', moderation:'moderation', community:'community', keywords:'keywords' }
 
 export async function getUi(userId:number):Promise<UiState> {
-  const { data } = await db.from('verif_ui_state').select('user_id,chat_id,message_id,edit_key,language').eq('user_id',userId).maybeSingle()
-  return (data as UiState | null) || { user_id:userId, chat_id:null, message_id:null, edit_key:null, language:'en' }
+  const { data,error } = await db.from('verif_ui_state').select('user_id,state,edit_key,language').eq('user_id',userId).maybeSingle()
+  if(error) throw error
+  const state=data?.state && typeof data.state==='object' && !Array.isArray(data.state) ? data.state as Record<string,unknown> : {}
+  const chatId=Number(state.chat_id)
+  const messageId=Number(state.message_id)
+  return {user_id:userId,chat_id:Number.isSafeInteger(chatId)&&chatId<0?chatId:null,message_id:Number.isSafeInteger(messageId)&&messageId>0?messageId:null,edit_key:data?.edit_key||null,language:langOf(data?.language),state}
 }
 async function saveUi(userId:number, patch:Partial<UiState>) {
-  const current = await getUi(userId)
-  const row = { ...current, ...patch, updated_at:new Date().toISOString() }
-  const { error } = await db.from('verif_ui_state').upsert(row,{ onConflict:'user_id' })
-  if (error) throw error
-  return row as UiState
+  const current=await getUi(userId)
+  const row={...current,...patch}
+  const state={...current.state,...(patch.state||{}),chat_id:row.chat_id,message_id:row.message_id}
+  const {error}=await db.from('verif_ui_state').upsert({user_id:userId,state,edit_key:row.edit_key,language:row.language,updated_at:new Date().toISOString()},{onConflict:'user_id'})
+  if(error) throw error
+  return {...row,state}
+}
+export async function setUiData(userId:number,patch:Record<string,unknown>) {
+  return saveUi(userId,{state:patch})
+}
+type VerificationLocation={chat_id:number;message_id:number}
+type VerificationLocationKind='prompt'|'notice'
+function isVerificationLocation(value:unknown):value is VerificationLocation {
+  if(!value||typeof value!=='object') return false
+  const location=value as Record<string,unknown>
+  return Number.isSafeInteger(location.chat_id)&&Number.isSafeInteger(location.message_id)
+}
+export async function getVerificationLocations(userId:number,sessionId:string) {
+  const ui=await getUi(userId)
+  const locations=ui.state.verification_locations
+  if(!locations||typeof locations!=='object'||Array.isArray(locations)) return {}
+  const session=(locations as Record<string,unknown>)[sessionId]
+  if(!session||typeof session!=='object'||Array.isArray(session)) return {}
+  const entry=session as Record<string,unknown>
+  return {prompt:isVerificationLocation(entry.prompt)?entry.prompt:undefined,notice:isVerificationLocation(entry.notice)?entry.notice:undefined}
+}
+export async function setVerificationLocation(userId:number,sessionId:string,kind:VerificationLocationKind,location:VerificationLocation|null) {
+  const ui=await getUi(userId)
+  const current=ui.state.verification_locations
+  const all=current&&typeof current==='object'&&!Array.isArray(current)?{...current as Record<string,unknown>}:{}
+  const existing=all[sessionId]
+  const entry=existing&&typeof existing==='object'&&!Array.isArray(existing)?{...existing as Record<string,unknown>}:{}
+  if(location) entry[kind]=location
+  else delete entry[kind]
+  if(Object.keys(entry).length) all[sessionId]=entry
+  else delete all[sessionId]
+  await saveUi(userId,{state:{verification_locations:all}})
+}
+export async function clearVerificationLocations(userId:number,sessionId:string) {
+  const ui=await getUi(userId)
+  const current=ui.state.verification_locations
+  if(!current||typeof current!=='object'||Array.isArray(current)) return
+  const all={...current as Record<string,unknown>}
+  delete all[sessionId]
+  await saveUi(userId,{state:{verification_locations:all}})
 }
 export async function getGroup(chatId:number):Promise<GroupRow | null> {
   const { data,error } = await db.from('verif_groups').select('chat_id,title,language,settings').eq('chat_id',chatId).maybeSingle()
@@ -125,7 +169,10 @@ function renderField(lang:Language,group:GroupRow,settings:BotSettings,key:strin
   const section=field.section
   if(field.kind==='toggle') keyboard.push([{text:`${label(field,lang)}: ${displayValue(value,lang)}`,callback_data:`toggle:${field.key}`}])
   else if(field.kind==='number') keyboard.push([{text:'−',callback_data:`step:${field.key}:-`},{text:String(value),callback_data:'noop'},{text:`+${field.step}`,callback_data:`step:${field.key}:+`}])
-  else if(field.kind==='choice') for(const choice of field.choices||[]) keyboard.push([{text:`${String(value)===choice?'✓ ':''}${tr(lang,choice as MessageKey)}`,callback_data:`choice:${field.key}:${choice}`}])
+  else if(field.kind==='choice') for(const choice of field.choices||[]) {
+    const choiceKey=field.key==='trigger'?(choice==='first_message'?'firstMessageTrigger':'joinTrigger'):choice
+    keyboard.push([{text:`${String(value)===choice?'✓ ':''}${tr(lang,choiceKey as MessageKey)}`,callback_data:`choice:${field.key}:${choice}`}])
+  }
   else keyboard.push([{text:tr(lang,'edit'),callback_data:`edit:${field.key}`}])
   keyboard.push([{text:tr(lang,'reset'),callback_data:`reset:${field.key}`}])
   keyboard.push([{text:tr(lang,'back'),callback_data:`screen:${section}`}])
@@ -192,18 +239,18 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
   if(action==='toggle' && field && field.kind==='toggle') {
     const value=currentValue(settings,field)
     await updateGroupSettings(currentChat,updateSetting(settings,field.key,!value))
-    await db.from('verif_ui_state').update({edit_key:field.key}).eq('user_id',userId)
+    await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
   if(action==='step' && field && field.kind==='number') {
     const old=Number(currentValue(settings,field)); const step=field.step||1; const next=old+(b==='+'?step:-step)
     await updateGroupSettings(currentChat,updateSetting(settings,field.key,Math.min(field.max||10000,Math.max(field.min||0,next))))
-    await db.from('verif_ui_state').update({edit_key:field.key}).eq('user_id',userId)
+    await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
   if(action==='choice' && field && field.kind==='choice' && field.choices?.includes(b)) {
     await updateGroupSettings(currentChat,updateSetting(settings,field.key,b))
-    await db.from('verif_ui_state').update({edit_key:field.key}).eq('user_id',userId)
+    await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
   if(action==='edit' && field) {
@@ -214,7 +261,7 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
   }
   if(action==='reset' && field) {
     await updateGroupSettings(currentChat,updateSetting(settings,field.key,(defaults.verification as Record<string,unknown>)[field.key]??(defaults.moderation as Record<string,unknown>)[field.key]))
-    await db.from('verif_ui_state').update({edit_key:field.key}).eq('user_id',userId)
+    await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
 }

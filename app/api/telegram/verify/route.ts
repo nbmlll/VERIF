@@ -2,7 +2,9 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getGroup } from '@/lib/panel'
-import { tg } from '@/lib/telegram'
+import { setMemberVerificationStatus } from '@/lib/members'
+import { publishVerificationSuccess, type VerificationSession } from '@/lib/verification'
+import { tg, type TelegramUser } from '@/lib/telegram'
 import { langOf, tr, type Language } from '@/lib/i18n'
 
 export const runtime='nodejs'
@@ -26,21 +28,22 @@ export async function GET(request:NextRequest) {
   const params=request.nextUrl.searchParams
   const sessionId=params.get('session')||''
   if(!/^[0-9a-f-]{36}$/i.test(sessionId)) return html(tr('en','verifyFailTitle'),tr('en','verifyInvalid'),403)
-  const {data:session}=await db.from('verif_verification_sessions').select('id,chat_id,user_id,mode,expires_at,prompt_message_id').eq('id',sessionId).maybeSingle()
+  const {data:session}=await db.from('verif_verification_sessions').select('id,chat_id,user_id,mode,challenge,expected_answer,expires_at,prompt_message_id').eq('id',sessionId).maybeSingle()
   const group=session?await getGroup(session.chat_id):null
   const lang=langOf(group?.language)
   if(!telegramLoginIsValid(params)) return html(tr(lang,'verifyFailTitle'),tr(lang,'verifyInvalid'),403,lang)
   const telegramUserId=Number(params.get('id'))
   if(!session||session.mode!=='web'||session.user_id!==telegramUserId||new Date(session.expires_at).getTime()<Date.now()) return html(tr(lang,'verifyFailTitle'),tr(lang,'verifyExpired'),403,lang)
   if(!group) return html(tr(lang,'verifyFailTitle'),tr(lang,'verifyUnavailable'),404,lang)
+  const telegramUser:TelegramUser={id:session.user_id,first_name:params.get('first_name')||'Member',last_name:params.get('last_name')||undefined,username:params.get('username')||undefined}
   try {
     await tg('restrictChatMember',{chat_id:session.chat_id,user_id:session.user_id,permissions:{can_send_messages:true,can_send_audios:true,can_send_documents:true,can_send_photos:true,can_send_videos:true,can_send_video_notes:true,can_send_voice_notes:true,can_send_polls:true,can_send_other_messages:true,can_add_web_page_previews:true},use_independent_chat_permissions:true})
-    await db.from('verif_members').upsert({chat_id:session.chat_id,user_id:session.user_id,verified_at:new Date().toISOString()},{onConflict:'chat_id,user_id'})
-    await db.from('verif_verification_sessions').delete().eq('id',session.id)
-    await db.from('verif_action_audit').insert({chat_id:session.chat_id,actor_id:session.user_id,action:'web_verification',details:{session_id:session.id},outcome:'success'})
-    if(session.prompt_message_id) {
-      try { await tg('editMessageText',{chat_id:session.chat_id,message_id:session.prompt_message_id,text:tr(lang,'verifySuccessMessage')}) } catch {}
-    }
+    await setMemberVerificationStatus(session.chat_id,session.user_id,'verified')
+    const {error:deleteError}=await db.from('verif_verification_sessions').delete().eq('id',session.id)
+    if(deleteError) throw deleteError
+    const {error:auditError}=await db.from('verif_action_audit').insert({chat_id:session.chat_id,actor_id:session.user_id,action:'web_verification',details:{session_id:session.id},outcome:'success'})
+    if(auditError) console.error('[verif] web verification audit insert failed',auditError.message)
+    await publishVerificationSuccess({session:session as VerificationSession,user:telegramUser,language:lang,legacyPromptMessageId:session.prompt_message_id})
     return html(tr(lang,'verifySuccess'),tr(lang,'verifySuccessBody'),200,lang)
   } catch(error) {
     console.error('[verif] web verification failed',error instanceof Error?error.message:'unknown error')

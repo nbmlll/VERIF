@@ -7,9 +7,9 @@ import { deleteMessage, sendMessage, tg, type TelegramMessage, userLabel } from 
 
 type Group={chat_id:number;title:string;language:string;settings:unknown}
 async function warn(chatId:number,userId:number,group:Group,reason:string) {
-  const {data}=await db.from('verif_members').select('warnings').eq('chat_id',chatId).eq('user_id',userId).maybeSingle()
+  const {data}=await db.from('verif_members').select('warnings').eq('chat_id',chatId).eq('telegram_user_id',userId).maybeSingle()
   const warnings=Number(data?.warnings||0)+1
-  await db.from('verif_members').upsert({chat_id:chatId,user_id:userId,warnings},{onConflict:'chat_id,user_id'})
+  await db.from('verif_members').upsert({chat_id:chatId,telegram_user_id:userId,warnings},{onConflict:'chat_id,telegram_user_id'})
   if(warnings>=3) {
     await tg('restrictChatMember',{chat_id:chatId,user_id:userId,permissions:{can_send_messages:false,can_send_audios:false,can_send_documents:false,can_send_photos:false,can_send_videos:false,can_send_video_notes:false,can_send_voice_notes:false,can_send_polls:false,can_send_other_messages:false,can_add_web_page_previews:false},until_date:Math.floor(Date.now()/1000)+600,use_independent_chat_permissions:true})
     await notify(chatId,group,`${reason} · ${tr(langOf(group.language),'mutedWarning',{count:String(warnings)})}`)
@@ -27,7 +27,7 @@ export async function enforceMessage(group:Group,message:TelegramMessage) {
   if(!user || user.is_bot || !text || text.startsWith('/')) return
   const settings=normalizeSettings(group.settings)
   const t=(key:Parameters<typeof tr>[1])=>tr(langOf(group.language),key)
-  await db.from('verif_members').upsert({chat_id:group.chat_id,user_id:user.id,username:user.username||null,display_name:userLabel(user)},{onConflict:'chat_id,user_id',ignoreDuplicates:true})
+  await db.from('verif_members').upsert({chat_id:group.chat_id,telegram_user_id:user.id,username:user.username||null,display_name:userLabel(user)},{onConflict:'chat_id,telegram_user_id',ignoreDuplicates:true})
   const contentHash=hash(text)
   const {error:insertError}=await db.from('verif_message_events').insert({chat_id:group.chat_id,user_id:user.id,content_hash:contentHash})
   if(insertError) throw insertError
