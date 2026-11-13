@@ -51,8 +51,8 @@ export async function enforceMessage(group:Group,message:TelegramMessage) {
   }
   const keywords=settings.moderation.keywords
   if(keywords.length) {
-    let match=keywords.find((keyword)=>keyword && text.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))||null
-    const mode=(settings.moderation as typeof settings.moderation & {keyword_mode?:string}).keyword_mode
+    const mode=settings.moderation.keyword_mode
+    let match=mode==='off' ? null : keywords.find((keyword)=>keyword && text.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))||null
     if(!match && mode==='ai') {
       try { match=await matchConfiguredKeyword(text,keywords) } catch { match=null }
     }
@@ -73,6 +73,7 @@ export async function welcomeMember(group:Group,user:{id:number;first_name:strin
   if(!settings.moderation.welcome_enabled) return
   const text=settings.moderation.welcome_text.replaceAll('{name}',[user.first_name,user.last_name].filter(Boolean).join(' ')).slice(0,800)
   const rules=settings.moderation.rules
-  const sent=await sendMessage(group.chat_id,text,rules?[{text:tr(langOf(group.language),'rulesButton'),callback_data:'rules'}].length?{inline_keyboard:[[{text:tr(langOf(group.language),'rulesButton'),callback_data:'rules'}]]}:undefined:undefined)
+  const keyboard=rules ? {inline_keyboard:[[{text:tr(langOf(group.language),'rulesButton'),callback_data:'rules'}]]} : undefined
+  const sent=await sendMessage(group.chat_id,text,keyboard)
   if(settings.moderation.auto_delete_seconds>0) await db.from('verif_scheduled_deletes').insert({chat_id:group.chat_id,message_id:sent.message_id,delete_at:new Date(Date.now()+settings.moderation.auto_delete_seconds*1000).toISOString()})
 }

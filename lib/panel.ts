@@ -1,12 +1,12 @@
 import { db } from './db'
-import { langOf, tr, languageName, type Language } from './i18n'
+import { langOf, tr, languageName, type Language, type MessageKey } from './i18n'
 import { defaults, fields, normalizeSettings, sectionFields, type BotSettings, type Field, type Section, updateSetting } from './settings'
 import { deleteMessage, editMessage, InlineButton, InlineKeyboard, sendMessage, tg } from './telegram'
 
 export type UiState = { user_id:number; chat_id:number | null; message_id:number | null; edit_key:string | null; language:Language }
 type GroupRow = { chat_id:number; title:string; language:Language; settings:unknown }
 type Screen = 'home' | Section | 'language' | 'field' | 'groups'
-const sectionNames: Record<Section, keyof ReturnType<typeof tr> | string> = { verification:'verification', moderation:'moderation', community:'community', keywords:'keywords' }
+const sectionNames: Record<Section, MessageKey> = { verification:'verification', moderation:'moderation', community:'community', keywords:'keywords' }
 
 export async function getUi(userId:number):Promise<UiState> {
   const { data } = await db.from('verif_ui_state').select('user_id,chat_id,message_id,edit_key,language').eq('user_id',userId).maybeSingle()
@@ -31,7 +31,7 @@ export async function updateGroupSettings(chatId:number, settings:BotSettings) {
 }
 const backData = 'screen:home'
 function fieldByKey(key:string):Field | undefined { return fields.find((field)=>field.key===key) }
-function label(field:Field,lang:Language) { return tr(lang,field.label as keyof typeof import('./i18n').messages.en) }
+function label(field:Field,lang:Language) { return tr(lang,field.label as MessageKey) }
 
 export async function startPanel(userId:number, chatId:number, payload?:string) {
   const { data:groupAdmins } = await db.from('verif_group_admins').select('chat_id,username').eq('user_id',userId)
@@ -122,9 +122,9 @@ function renderField(lang:Language,group:GroupRow,settings:BotSettings,key:strin
   if(!field) return {text:tr(lang,'settings'),keyboard:{inline_keyboard:[[ {text:tr(lang,'back'),callback_data:backData} ]]}}
   const value=currentValue(settings,field)
   const section=field.section
-  if(field.kind==='toggle') keyboard.push([{text:`${tr(lang,'on')}: ${displayValue(value,lang)}`,callback_data:`toggle:${field.key}`}])
+  if(field.kind==='toggle') keyboard.push([{text:`${label(field,lang)}: ${displayValue(value,lang)}`,callback_data:`toggle:${field.key}`}])
   else if(field.kind==='number') keyboard.push([{text:'−',callback_data:`step:${field.key}:-`},{text:String(value),callback_data:'noop'},{text:`+${field.step}`,callback_data:`step:${field.key}:+`}])
-  else if(field.kind==='choice') for(const choice of field.choices||[]) keyboard.push([{text:`${String(value)===choice?'✓ ':''}${choice}`,callback_data:`choice:${field.key}:${choice}`}])
+  else if(field.kind==='choice') for(const choice of field.choices||[]) keyboard.push([{text:`${String(value)===choice?'✓ ':''}${tr(lang,choice as MessageKey)}`,callback_data:`choice:${field.key}:${choice}`}])
   else keyboard.push([{text:tr(lang,'edit'),callback_data:`edit:${field.key}`}])
   keyboard.push([{text:tr(lang,'reset'),callback_data:`reset:${field.key}`}])
   keyboard.push([{text:tr(lang,'back'),callback_data:`screen:${section}`}])
@@ -152,13 +152,13 @@ export async function present(userId:number,screen:Screen,chatId:number|null,ext
   await saveUi(userId,{chat_id:chatId,message_id:sentId,edit_key:screen==='field' ? ui.edit_key : null})
 }
 export async function handlePanelCallback(userId:number,callbackId:string,messageId:number,data:string) {
-  await tg('answerCallbackQuery',{callback_query_id:callbackId})
   const ui=await getUi(userId)
   const group=ui.chat_id ? await getGroup(ui.chat_id) : null
   if(group && !(await isAdmin(group.chat_id,userId))) {
     await tg('answerCallbackQuery',{callback_query_id:callbackId,text:tr(langOf(group.language),'adminOnly'),show_alert:true})
     return
   }
+  await tg('answerCallbackQuery',{callback_query_id:callbackId})
   const currentChat=group?.chat_id ?? null
   const lang=group ? langOf(group.language) : langOf(ui.language)
   const [action,a,b]=data.split(':')

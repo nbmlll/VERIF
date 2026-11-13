@@ -1,0 +1,32 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { db } from '@/lib/db'
+import { tg, deleteMessage } from '@/lib/telegram'
+
+export const runtime='nodejs'
+export const dynamic='force-dynamic'
+export async function GET(request:NextRequest) {
+  const secret=process.env.CRON_SECRET
+  if(!secret||request.headers.get('authorization')!==`Bearer ${secret}`) return NextResponse.json({ok:false},{status:401})
+  const now=new Date().toISOString()
+  const {data:expired}=await db.from('verif_verification_sessions').select('id,chat_id,user_id,prompt_message_id').lt('expires_at',now).limit(100)
+  let sessionsExpired=0
+  for(const session of expired||[]) {
+    try {
+      await tg('banChatMember',{chat_id:session.chat_id,user_id:session.user_id,until_date:Math.floor(Date.now()/1000)+30,revoke_messages:true})
+      await tg('unbanChatMember',{chat_id:session.chat_id,user_id:session.user_id,only_if_banned:true})
+      if(session.prompt_message_id) await deleteMessage(session.chat_id,session.prompt_message_id)
+      await db.from('verif_verification_sessions').delete().eq('id',session.id)
+      sessionsExpired++
+    } catch(error) { console.error('[verif] expired verification cleanup failed',error instanceof Error?error.message:'unknown error') }
+  }
+  const {data:due}=await db.from('verif_scheduled_deletes').select('id,chat_id,message_id').lte('delete_at',now).limit(100)
+  let messagesDeleted=0
+  for(const item of due||[]) {
+    await deleteMessage(item.chat_id,item.message_id)
+    await db.from('verif_scheduled_deletes').delete().eq('id',item.id)
+    messagesDeleted++
+  }
+  await db.from('verif_message_events').delete().lt('created_at',new Date(Date.now()-7*86400_000).toISOString())
+  await db.from('verif_processed_updates').delete().lt('created_at',new Date(Date.now()-86400_000).toISOString())
+  return NextResponse.json({ok:true,sessionsExpired,messagesDeleted})
+}
