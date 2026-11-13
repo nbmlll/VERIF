@@ -7,11 +7,11 @@ export default function HomePage() {
         <a href="/" className="text-lg font-bold tracking-tight">VERIF<span className="text-brand">/</span></a>
         <span className="rounded-full border border-foreground/10 bg-surface px-3 py-1 text-sm text-muted">Telegram group tools</span>
       </header>
-      <section className="flex flex-col justify-center py-8 md:py-10">
+      <section className="flex flex-col justify-center py-4 md:py-6">
         <p className="mb-3 font-mono text-sm uppercase tracking-[0.16em] text-brand">Verification · moderation · control</p>
-        <h1 className="max-w-3xl text-balance text-4xl font-semibold leading-tight tracking-tight md:text-6xl">Run your group.<br />Keep the rules yours.</h1>
-        <p className="mt-4 max-w-xl text-pretty text-base leading-relaxed text-muted">Configure verification, message limits, welcomes, and rules through Telegram&apos;s private inline control panel. Every action is validated against group settings and admin permissions.</p>
-        <div className="mt-5">
+        <h1 className="max-w-3xl text-balance text-4xl font-semibold leading-tight tracking-tight md:text-5xl">Run your group.<br />Keep the rules yours.</h1>
+        <p className="mt-3 max-w-xl text-pretty text-sm leading-relaxed text-muted">Configure verification, message limits, welcomes, and rules through Telegram&apos;s private inline control panel. Every action is validated against group settings and admin permissions.</p>
+        <div className="mt-3">
           <WebhookSetup />
         </div>
         <div className="mt-3 flex flex-wrap gap-3">
