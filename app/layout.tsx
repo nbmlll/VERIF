@@ -1,12 +1,12 @@
 import type { Metadata, Viewport } from 'next'
+import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
 
-export const metadata: Metadata = {
-  title: 'VERIF — Group verification and moderation',
-  description: 'Telegram group verification and moderation configured by admins with inline controls.',
-}
-export const viewport: Viewport = { themeColor: '#0b1820', width: 'device-width', initialScale: 1 }
+const geistSans=Geist({subsets:['latin'],variable:'--font-geist-sans'})
+const geistMono=Geist_Mono({subsets:['latin'],variable:'--font-geist-mono'})
+export const metadata:Metadata={title:'VERIF — Telegram group tools',description:'Configure Telegram group verification and moderation with an inline admin control center.'}
+export const viewport:Viewport={themeColor:'#0b7580',width:'device-width',initialScale:1}
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" className="bg-background"><body>{children}</body></html>
+export default function RootLayout({children}:{children:React.ReactNode}) {
+  return <html lang="en" className="bg-background"><body className={`${geistSans.variable} ${geistMono.variable} font-sans`}>{children}</body></html>
 }

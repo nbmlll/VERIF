@@ -91,7 +91,7 @@ async function render(userId:number,screen:Screen,chatId:number|null,extras?:num
   if(screen==='language') {
     for(const choice of ['en','ru','zh','ar'] as Language[]) keyboard.push([{text:languageName(choice),callback_data:`lang:${choice}`}])
     keyboard.push([{text:tr(lang,'back'),callback_data:'screen:groups'}])
-    return {text:tr(lang,'language'),keyboard:{inline_keyboard:keyboard}}
+    return {text:tr(lang,'chooseLanguage'),keyboard:{inline_keyboard:keyboard}}
   }
   if(screen==='groups') {
     const {data:groups}=await db.from('verif_group_admins').select('chat_id').eq('user_id',userId)
@@ -100,8 +100,9 @@ async function render(userId:number,screen:Screen,chatId:number|null,extras?:num
       const candidate=await getGroup(row.chat_id)
       if(candidate && await isAdmin(row.chat_id,userId)) keyboard.push([{text:candidate.title.slice(0,60),callback_data:`group:${row.chat_id}`}])
     }
-    if(!keyboard.length) keyboard.push([{text:tr(lang,'home'),callback_data:backData}])
-    return {text:tr(lang,'chooseGroup'),keyboard:{inline_keyboard:keyboard}}
+    const groupCount=keyboard.length
+    if(!groupCount) keyboard.push([{text:tr(lang,'language'),callback_data:'screen:language'}])
+    return {text:groupCount?tr(lang,'chooseGroup'):tr(lang,'noGroups'),keyboard:{inline_keyboard:keyboard}}
   }
   if(!group) return {text:tr(lang,'noGroups'),keyboard:{inline_keyboard:[[{text:tr(lang,'language'),callback_data:'screen:language'}]]}}
   const settings=groupSettings(group)
@@ -115,7 +116,7 @@ async function render(userId:number,screen:Screen,chatId:number|null,extras?:num
     keyboard.push([{text:`${label(field,lang)}: ${val}`.slice(0,60),callback_data:`field:${field.key}`}])
   }
   keyboard.push([{text:tr(lang,'back'),callback_data:backData}])
-  return {text:`${tr(lang,sectionNames[section] as keyof typeof import('./i18n').messages.en)} · ${group.title}`,keyboard:{inline_keyboard:keyboard}}
+  return {text:`${tr(lang,sectionNames[section])} · ${group.title}`,keyboard:{inline_keyboard:keyboard}}
 }
 function renderField(lang:Language,group:GroupRow,settings:BotSettings,key:string|null,keyboard:InlineButton[][]) {
   const field=key ? fieldByKey(key) : undefined
@@ -209,7 +210,7 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
     await saveUi(userId,{edit_key:field.key})
     const prompt=field.key==='welcome_text'?'editWelcome':field.key==='rules'?'editRules':field.key==='join_chat_id'?'joinChat':'editKeywords'
     const currentFieldView=await render(userId,'field',currentChat)
-    return editMessage(userId,messageId,`${currentFieldView.text}\n\n${tr(lang,prompt as keyof typeof import('./i18n').messages.en)}`,{inline_keyboard:[[{text:tr(lang,'back'),callback_data:`field:${field.key}`}]]})
+    return editMessage(userId,messageId,`${currentFieldView.text}\n\n${tr(lang,prompt as MessageKey)}`,{inline_keyboard:[[{text:tr(lang,'back'),callback_data:`field:${field.key}`}]]})
   }
   if(action==='reset' && field) {
     await updateGroupSettings(currentChat,updateSetting(settings,field.key,(defaults.verification as Record<string,unknown>)[field.key]??(defaults.moderation as Record<string,unknown>)[field.key]))

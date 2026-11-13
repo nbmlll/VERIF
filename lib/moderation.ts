@@ -12,8 +12,8 @@ async function warn(chatId:number,userId:number,group:Group,reason:string) {
   await db.from('verif_members').upsert({chat_id:chatId,user_id:userId,warnings},{onConflict:'chat_id,user_id'})
   if(warnings>=3) {
     await tg('restrictChatMember',{chat_id:chatId,user_id:userId,permissions:{can_send_messages:false,can_send_audios:false,can_send_documents:false,can_send_photos:false,can_send_videos:false,can_send_video_notes:false,can_send_voice_notes:false,can_send_polls:false,can_send_other_messages:false,can_add_web_page_previews:false},until_date:Math.floor(Date.now()/1000)+600,use_independent_chat_permissions:true})
-    await notify(chatId,group,`${reason} · ${warnings}/3. Member muted for 10 minutes.`)
-  } else await notify(chatId,group,`${reason} · warning ${warnings}/3.`)
+    await notify(chatId,group,`${reason} · ${tr(langOf(group.language),'mutedWarning',{count:String(warnings)})}`)
+  } else await notify(chatId,group,`${reason} · ${tr(langOf(group.language),'warningCount',{count:String(warnings)})}`)
 }
 async function notify(chatId:number,group:Group,text:string) {
   const settings=normalizeSettings(group.settings)

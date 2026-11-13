@@ -73,12 +73,12 @@ async function beginVerification(chatId:number,user:{id:number;first_name:string
     const options=[correct,correct+1,Math.max(0,correct-1),correct+2].sort(()=>Math.random()-.5)
     markup={inline_keyboard:[options.map((value)=>({text:String(value),callback_data:`ver:${data.id}:${value}`}))]}
   } else if(mode==='web') {
-    markup={inline_keyboard:[[{text:'Open web verification',url:`${appUrl(request)}/verify?id=${encodeURIComponent(data.id)}`}]]}
+    markup={inline_keyboard:[[{text:tr(lang,'webButton'),url:`${appUrl(request)}/verify?id=${encodeURIComponent(data.id)}`}]]}
   } else if(mode==='invite') {
-    text+=`\nInvite ${settings.verification.required_invites} member(s), then press Check.`
-    markup={inline_keyboard:[[{text:'Check invitations',callback_data:`ver:${data.id}:check`}]]}
+    text+=`\n${tr(lang,'invitePrompt',{count:String(settings.verification.required_invites)})}`
+    markup={inline_keyboard:[[{text:tr(lang,'checkInvitations'),callback_data:`ver:${data.id}:check`}]]}
   } else {
-    markup={inline_keyboard:[[{text:'Check channel membership',callback_data:`ver:${data.id}:check`}]]}
+    markup={inline_keyboard:[[{text:tr(lang,'checkChannel'),callback_data:`ver:${data.id}:check`}]]}
   }
   const sent=await sendMessage(chatId,text,markup,{reply_to_message_id:undefined})
   await db.from('verif_verification_sessions').update({prompt_message_id:sent.message_id}).eq('id',data.id)
@@ -88,9 +88,10 @@ async function completeVerification(update:TelegramUpdate) {
   const query=update.callback_query!
   const [_,id,answer]=String(query.data||'').split(':')
   if(!query.message || !id) return
+  const languageGroup=await getGroup(query.message.chat.id)
   const {data:session}=await db.from('verif_verification_sessions').select('id,chat_id,user_id,mode,challenge,expected_answer,expires_at,prompt_message_id').eq('id',id).maybeSingle()
   if(!session || session.user_id!==query.from.id || session.chat_id!==query.message.chat.id) {
-    await tg('answerCallbackQuery',{callback_query_id:query.id,text:'This check belongs to another member.',show_alert:true}); return
+    await tg('answerCallbackQuery',{callback_query_id:query.id,text:tr(langOf(languageGroup?.language),'notYourCheck'),show_alert:true}); return
   }
   const group=await getGroup(session.chat_id)
   if(!group) return
@@ -125,15 +126,6 @@ async function processGroupMessage(message:TelegramMessage,request:NextRequest) 
   if(!['group','supergroup'].includes(chat.type)) return
   const group=await ensureGroup(chat.id,chat.title||'Telegram group')
   if(!group) return
-  if(message.new_chat_members?.length) {
-    for(const user of message.new_chat_members) {
-      if(user.is_bot) continue
-      if(message.from && message.from.id!==user.id) await db.from('verif_join_invites').upsert({chat_id:chat.id,invitee_id:user.id,inviter_id:message.from.id},{onConflict:'chat_id,invitee_id'})
-      await beginVerification(chat.id,user,request)
-      const fresh=await getGroup(chat.id)
-      if(fresh) await welcomeMember(fresh,user)
-    }
-  }
   const text=message.text?.trim()
   const sender=message.from
   if(!text||!sender) return
@@ -149,7 +141,7 @@ async function processGroupMessage(message:TelegramMessage,request:NextRequest) 
     return
   }
   if(/^\/help(?:@\w+)?(?:\s|$)/i.test(text)) {
-    await sendMessage(chat.id,'/settings — open the private inline control panel\n/rules — show configured group rules')
+    await sendMessage(chat.id,tr(langOf(group.language),'groupHelp'))
     return
   }
   if(sender.is_bot) return
@@ -201,24 +193,21 @@ async function processUpdate(update:TelegramUpdate,request:NextRequest) {
     }
   } else if(update.message) await processGroupMessage(update.message,request)
   if(update.callback_query?.data?.startsWith('ver:')) await completeVerification(update)
-  else if(update.callback_query?.data==='rules' && update.callback_query.message) {
+  else if(update.callback_query?.data==='rules') {
     const query=update.callback_query
-    const group=await getGroup(query.message.chat.id)
+    const target=query.message
+    if(!target) return
+    const group=await getGroup(target.chat.id)
     const rules=group?groupSettings(group).moderation.rules:''
     await tg('answerCallbackQuery',{callback_query_id:query.id})
-    try { await tg('editMessageText',{chat_id:query.message.chat.id,message_id:query.message.message_id,text:rules||tr(langOf(group?.language),'rulesButton')}) } catch {}
+    try { await tg('editMessageText',{chat_id:target.chat.id,message_id:target.message_id,text:rules||tr(langOf(group?.language),'rulesButton')}) } catch {}
   } else if(update.callback_query?.message?.chat.type==='private' && update.callback_query.data) {
     await handlePanelCallback(update.callback_query.from.id,update.callback_query.id,update.callback_query.message.message_id,update.callback_query.data)
   } else if(update.callback_query) await tg('answerCallbackQuery',{callback_query_id:update.callback_query.id})
 }
 
-export async function GET(request:NextRequest) {
-  if(request.nextUrl.searchParams.get('setup')==='1') {
-    const url=`${appUrl(request)}/api/telegram/webhook`
-    await tg('setWebhook',{url,secret_token:webhookSecret,allowed_updates:['message','callback_query','my_chat_member','chat_member'],drop_pending_updates:false})
-    return NextResponse.json({ok:true,webhook:'configured',allowed_updates:['message','callback_query','my_chat_member','chat_member']})
-  }
-  return NextResponse.json({ok:true,service:'VERIF Telegram webhook',setup:'/api/telegram/webhook?setup=1'})
+export async function GET() {
+  return NextResponse.json({ok:true,service:'VERIF Telegram webhook',setup:'Webhook registration is performed by the authenticated scheduled maintenance job.'})
 }
 
 export async function POST(request:NextRequest) {

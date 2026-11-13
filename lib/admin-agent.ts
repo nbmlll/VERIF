@@ -43,7 +43,7 @@ export async function handleAdminGroupText(group:{chat_id:number;title:string;la
       if(!target||target.is_bot||!message.reply_to_message) return false
       const member=await tg<{status:string}>('getChatMember',{chat_id:group.chat_id,user_id:target.id})
       if(member.status==='administrator'||member.status==='creator') return false
-      const reason=(intent.reason||'Group admin action').slice(0,250)
+      const reason=(intent.reason||t('defaultReason')).slice(0,250)
       if(intent.action==='warn') {
         const {data}=await db.from('verif_members').select('warnings').eq('chat_id',group.chat_id).eq('user_id',target.id).maybeSingle()
         await db.from('verif_members').upsert({chat_id:group.chat_id,user_id:target.id,warnings:Number(data?.warnings||0)+1},{onConflict:'chat_id,user_id'})
@@ -54,7 +54,8 @@ export async function handleAdminGroupText(group:{chat_id:number;title:string;la
         if(intent.action==='kick') await tg('unbanChatMember',{chat_id:group.chat_id,user_id:target.id,only_if_banned:true})
       } else await tg('unbanChatMember',{chat_id:group.chat_id,user_id:target.id,only_if_banned:true})
       await db.from('verif_message_events').insert({chat_id:group.chat_id,user_id:admin.id,content_hash:`admin:${intent.action}:${target.id}:${Date.now()}`})
-      await sendMessage(group.chat_id,`${intent.action} completed for ${target.first_name}. ${reason}`)
+      const actionKey=`${intent.action}Action` as 'warnAction'|'muteAction'|'banAction'|'kickAction'|'unbanAction'
+      await sendMessage(group.chat_id,t('actionResult',{action:t(actionKey),name:target.first_name,reason}))
       return true
     }
     default: return false

@@ -7,6 +7,17 @@ export const dynamic='force-dynamic'
 export async function GET(request:NextRequest) {
   const secret=process.env.CRON_SECRET
   if(!secret||request.headers.get('authorization')!==`Bearer ${secret}`) return NextResponse.json({ok:false},{status:401})
+  const origin=process.env.APP_URL?.replace(/\/$/,'') || (process.env.VERCEL_URL?`https://${process.env.VERCEL_URL}`:new URL(request.url).origin)
+  const webhookUrl=`${origin}/api/telegram/webhook`
+  let webhookRegistered=false
+  try {
+    const current=await tg<{url:string}>('getWebhookInfo')
+    if(current.url!==webhookUrl) {
+      const secretToken=await import('node:crypto').then(({createHash})=>createHash('sha256').update(`${process.env.TELEGRAM_BOT_TOKEN}:verif-webhook`).digest('hex'))
+      await tg('setWebhook',{url:webhookUrl,secret_token:secretToken,allowed_updates:['message','callback_query','my_chat_member','chat_member'],drop_pending_updates:false})
+      webhookRegistered=true
+    }
+  } catch(error) { console.error('[verif] webhook registration failed',error instanceof Error?error.message:'unknown error') }
   const now=new Date().toISOString()
   const {data:expired}=await db.from('verif_verification_sessions').select('id,chat_id,user_id,prompt_message_id').lt('expires_at',now).limit(100)
   let sessionsExpired=0
@@ -28,5 +39,5 @@ export async function GET(request:NextRequest) {
   }
   await db.from('verif_message_events').delete().lt('created_at',new Date(Date.now()-7*86400_000).toISOString())
   await db.from('verif_processed_updates').delete().lt('created_at',new Date(Date.now()-86400_000).toISOString())
-  return NextResponse.json({ok:true,sessionsExpired,messagesDeleted})
+  return NextResponse.json({ok:true,webhookRegistered,sessionsExpired,messagesDeleted})
 }
