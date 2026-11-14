@@ -219,11 +219,11 @@ const destructiveIds = new Set([
   'automatic_raid_lockdown',
 ])
 const partialIds = new Set([
-  'anti_spam', 'anti_flood', 'duplicate_content_detection', 'telegram_challenge_verification',
+  'anti_spam', 'anti_flood', 'character_word_spam_detection', 'duplicate_content_detection', 'telegram_challenge_verification',
   'verification_on_join', 'verification_on_first_message', 'verification_timeout_retry_expiration',
-  'automatic_verification_restriction', 'member_profile_lookup', 'warning_strike_system', 'automatic_escalation',
+  'automatic_verification_restriction', 'member_profile_lookup', 'warning_strike_system', 'ban_user', 'unban_user', 'kick_user', 'temporary_restriction', 'automatic_escalation',
   'delete_message', 'group_scoped_settings', 'protection_detection_settings', 'verification_settings',
-  'moderation_warning_rule_settings', 'action_attribution_audit',
+  'moderation_warning_rule_settings', 'notification_language_settings', 'action_attribution_audit',
 ])
 
 const schemaFor = (category: CapabilityCategory, id: string): z.ZodTypeAny => {

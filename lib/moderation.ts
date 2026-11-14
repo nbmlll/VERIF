@@ -7,11 +7,14 @@ import { deleteMessage, sendMessage, tg, type TelegramMessage, userLabel } from 
 
 type Group={chat_id:number;title:string;language:string;settings:unknown}
 async function warn(chatId:number,userId:number,group:Group,reason:string) {
-  const {data}=await db.from('verif_members').select('warnings').eq('chat_id',chatId).eq('telegram_user_id',userId).maybeSingle()
-  const warnings=Number(data?.warnings||0)+1
-  await db.from('verif_members').upsert({chat_id:chatId,telegram_user_id:userId,warnings},{onConflict:'chat_id,telegram_user_id'})
+  const {data,error}=await db.rpc('increment_verif_member_warning',{p_chat_id:chatId,p_telegram_user_id:userId})
+  if(error) throw error
+  const warnings=Number(data)
+  if(!Number.isInteger(warnings)||warnings<1) throw new Error('Warning increment was not confirmed')
   if(warnings>=3) {
     await tg('restrictChatMember',{chat_id:chatId,user_id:userId,permissions:{can_send_messages:false,can_send_audios:false,can_send_documents:false,can_send_photos:false,can_send_videos:false,can_send_video_notes:false,can_send_voice_notes:false,can_send_polls:false,can_send_other_messages:false,can_add_web_page_previews:false},until_date:Math.floor(Date.now()/1000)+600,use_independent_chat_permissions:true})
+    const member=await tg<{status:string;permissions?:{can_send_messages?:boolean}}>('getChatMember',{chat_id:chatId,user_id:userId})
+    if(member.status!=='restricted'||member.permissions?.can_send_messages!==false) throw new Error('Automatic restriction was not confirmed')
     await notify(chatId,group,`${reason} · ${tr(langOf(group.language),'mutedWarning',{count:String(warnings)})}`)
   } else await notify(chatId,group,`${reason} · ${tr(langOf(group.language),'warningCount',{count:String(warnings)})}`)
 }

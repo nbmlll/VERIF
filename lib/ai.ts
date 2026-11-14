@@ -3,8 +3,8 @@ import { z } from 'zod'
 
 const model = 'google/gemini-2.5-flash'
 const commandSchema = z.object({
-  action: z.enum(['set_message_length','set_flood_limit','set_welcome','set_rules','set_keyword','set_verification_mode','warn','mute','ban','kick','unban','show_rules','unknown']),
-  value: z.string().max(1200).nullable(),
+  action: z.enum(['set_message_length','set_flood_limit','set_flood_window','set_duplicate_limit','set_welcome_enabled','set_welcome','set_rules','set_keyword','set_keyword_mode','set_keyword_action','set_auto_delete','set_verification_enabled','set_verification_trigger','set_verification_mode','set_verification_timeout','set_required_invites','set_web_enabled','set_join_chat','warn','mute','ban','kick','unban','show_rules','unknown']),
+  value: z.union([z.string().max(1200),z.number().int(),z.boolean()]).nullable(),
   target_user_id: z.number().int().positive().nullable(),
   reason: z.string().max(300).nullable(),
 })
@@ -13,7 +13,7 @@ export async function interpretAdminCommand(text: string): Promise<AdminIntent> 
   const { output } = await generateText({
     model,
     output: Output.object({ schema: commandSchema }),
-    system: 'Extract one admin intent from this Telegram group message. Return only the schema. Never invent user ids, group ids, values, or targets. If uncertain, use action unknown. This app does not grant arbitrary tools and the server validates every action.',
+    system: 'Extract one admin intent from this Telegram group message. Return only the schema. Never invent user ids, group ids, values, or targets. Moderation targets come only from the replied-to message; never use a guessed target_user_id. Return booleans as JSON booleans and numeric settings as integers. Extract setting values only when the administrator explicitly requests them. If uncertain, use action unknown. This app does not grant arbitrary tools and the server validates every action.',
     prompt: text.slice(0, 1500),
     maxOutputTokens: 160,
   })

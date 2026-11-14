@@ -1,11 +1,14 @@
+import { createHash } from 'node:crypto'
 import { db } from './db'
+import { createLiveCapabilityActionService } from './capability-action-runtime'
+import { CAPABILITIES, CAPABILITY_CATEGORIES, getCapabilitiesByCategory, getCapability } from './capabilities'
 import { langOf, tr, languageName, type Language, type MessageKey } from './i18n'
-import { defaults, fields, normalizeSettings, sectionFields, type BotSettings, type Field, type Section, updateSetting } from './settings'
+import { defaults, fields, normalizeSettings, sectionFields, type BotSettings, type Field, type Section } from './settings'
 import { deleteMessage, editMessage, InlineButton, InlineKeyboard, sendMessage, tg } from './telegram'
 
 export type UiState = { user_id:number; chat_id:number | null; message_id:number | null; edit_key:string | null; language:Language; state:Record<string,unknown> }
 type GroupRow = { chat_id:number; title:string; language:Language; settings:unknown }
-type Screen = 'home' | Section | 'language' | 'field' | 'groups'
+type Screen = 'home' | Section | 'language' | 'field' | 'groups' | 'capabilities' | 'capability-category' | 'capability-detail'
 const sectionNames: Record<Section, MessageKey> = { verification:'verification', moderation:'moderation', community:'community', keywords:'keywords' }
 
 export async function getUi(userId:number):Promise<UiState> {
@@ -73,6 +76,30 @@ export async function updateGroupSettings(chatId:number, settings:BotSettings) {
   const { error } = await db.from('verif_groups').update({settings,updated_at:new Date().toISOString()}).eq('chat_id',chatId)
   if(error) throw error
 }
+const capabilityActions=createLiveCapabilityActionService({getGroup,updateGroupSettings})
+const settingActionByKey:Record<Field['key'],string>={
+  max_message_length:'set_message_length',flood_limit:'set_flood_limit',flood_window_seconds:'set_flood_window',duplicate_limit:'set_duplicate_limit',
+  welcome_enabled:'set_welcome_enabled',welcome_text:'set_welcome',rules:'set_rules',keywords:'set_keyword',keyword_action:'set_keyword_action',keyword_mode:'set_keyword_mode',auto_delete_seconds:'set_auto_delete',
+  enabled:'set_verification_enabled',trigger:'set_verification_trigger',mode:'set_verification_mode',timeout_seconds:'set_verification_timeout',required_invites:'set_required_invites',web_enabled:'set_web_enabled',join_chat_id:'set_join_chat',
+}
+function actionFeedbackKey(status:string):Parameters<typeof tr>[1] {
+  if(status==='invalid_input') return 'invalid'
+  if(status==='admin_required') return 'adminOnly'
+  if(['action_failed','state_unverified','audit_finalize_failed'].includes(status)) return 'actionNeedsReview'
+  return 'actionFailed'
+}
+async function applyPanelSetting(userId:number,chatId:number,eventToken:string,key:Field['key'],value:unknown,language:Language) {
+  const result=await capabilityActions.executeSetting({chatId,actorId:userId,eventToken,action:settingActionByKey[key],value})
+  if(result.status==='success'||result.status==='already_processed') return true
+  await sendMessage(userId,tr(language,actionFeedbackKey(result.status)))
+  return false
+}
+async function updatePanelLanguage(userId:number,chatId:number,eventToken:string,language:Language,currentLanguage:Language) {
+  const result=await capabilityActions.executeLanguageAction({chatId,actorId:userId,eventToken,language})
+  if(result.status==='success'||result.status==='already_processed') return true
+  await sendMessage(userId,tr(currentLanguage,actionFeedbackKey(result.status)))
+  return false
+}
 const backData = 'screen:home'
 function fieldByKey(key:string):Field | undefined { return fields.find((field)=>field.key===key) }
 function label(field:Field,lang:Language) { return tr(lang,field.label as MessageKey) }
@@ -124,6 +151,7 @@ function sections(lang:Language):InlineButton[][] {
     [{text:tr(lang,'moderation'),callback_data:'screen:moderation'}],
     [{text:tr(lang,'community'),callback_data:'screen:community'}],
     [{text:tr(lang,'keywords'),callback_data:'screen:keywords'}],
+    [{text:tr(lang,'capabilityCatalog'),callback_data:'screen:capabilities'}],
     [{text:tr(lang,'language'),callback_data:'screen:language'},{text:tr(lang,'groups'),callback_data:'screen:groups'}],
   ]
 }
@@ -152,6 +180,40 @@ async function render(userId:number,screen:Screen,chatId:number|null,extras?:num
   const settings=groupSettings(group)
   if(screen==='home') {
     return {text:`${header(group,lang)}\n\n${tr(lang,'useSettings')}`,keyboard:{inline_keyboard:sections(lang)}}
+  }
+  if(screen==='capabilities') {
+    const categoryButtons=CAPABILITY_CATEGORIES.map((category)=>({text:`${category.label} · ${getCapabilitiesByCategory(category.id).length}`.slice(0,60),callback_data:`capcat:${category.id}:0`}))
+    for(let index=0;index<categoryButtons.length;index+=2) keyboard.push(categoryButtons.slice(index,index+2))
+    keyboard.push([{text:tr(lang,'back'),callback_data:backData}])
+    const counts={implemented:0,partial:0,planned:0,unsupported:0}
+    for(const capability of CAPABILITIES) counts[capability.implementationStatus]++
+    return {text:`${tr(lang,'capabilityCatalog')}\n${tr(lang,'capabilitySummary',{total:String(Object.values(counts).reduce((sum,count)=>sum+count,0)),implemented:String(counts.implemented),partial:String(counts.partial),planned:String(counts.planned),unsupported:String(counts.unsupported)})}`,keyboard:{inline_keyboard:keyboard}}
+  }
+  if(screen==='capability-category') {
+    const categoryId=String(ui.state.capability_category||'')
+    const category=CAPABILITY_CATEGORIES.find((item)=>item.id===categoryId)
+    if(!category) return {text:tr(lang,'capabilityCatalog'),keyboard:{inline_keyboard:[[{text:tr(lang,'back'),callback_data:'screen:capabilities'}]]}}
+    const capabilities=getCapabilitiesByCategory(category.id)
+    const page=Math.min(Math.max(0,Number(ui.state.capability_page)||0),Math.max(0,Math.ceil(capabilities.length/8)-1))
+    for(const capability of capabilities.slice(page*8,page*8+8)) {
+      const statusKey=`capabilityStatus${capability.implementationStatus[0].toUpperCase()}${capability.implementationStatus.slice(1)}` as 'capabilityStatusImplemented'|'capabilityStatusPartial'|'capabilityStatusPlanned'|'capabilityStatusUnsupported'
+      keyboard.push([{text:`${capability.name} · ${tr(lang,statusKey)}`.slice(0,60),callback_data:`capdetail:${capability.id}`}])
+    }
+    const pages=Math.ceil(capabilities.length/8)
+    if(pages>1) keyboard.push([{text:'‹',callback_data:`cappage:${Math.max(0,page-1)}`},{text:`${page+1}/${pages}`,callback_data:'noop'},{text:'›',callback_data:`cappage:${Math.min(pages-1,page+1)}`}])
+    keyboard.push([{text:tr(lang,'back'),callback_data:'screen:capabilities'}])
+    return {text:`${category.label} · ${page+1}/${pages||1}`,keyboard:{inline_keyboard:keyboard}}
+  }
+  if(screen==='capability-detail') {
+    const capability=getCapability(String(ui.state.capability_id||''))
+    if(!capability) return {text:tr(lang,'capabilityCatalog'),keyboard:{inline_keyboard:[[{text:tr(lang,'back'),callback_data:'screen:capabilities'}]]}}
+    const statusKey=`capabilityStatus${capability.implementationStatus[0].toUpperCase()}${capability.implementationStatus.slice(1)}` as 'capabilityStatusImplemented'|'capabilityStatusPartial'|'capabilityStatusPlanned'|'capabilityStatusUnsupported'
+    const permissions=capability.requiredTelegramPermissions.length?capability.requiredTelegramPermissions.map((permission)=>permission.replaceAll('_',' ')).join(', '):'none'
+    const notice=capability.implementationStatus==='partial'?tr(lang,'capabilityPartialNotice'):capability.implementationStatus==='implemented'?'':tr(lang,'capabilityUnavailableNotice')
+    const reason=capability.unsupportedReason?`\n\n${capability.unsupportedReason}`:''
+    const text=[capability.name,tr(lang,'capabilityStatusLine',{status:tr(lang,statusKey),risk:capability.risk}),tr(lang,'capabilityPermissions',{permissions}),notice,reason].filter(Boolean).join('\n\n')
+    keyboard.push([{text:tr(lang,'back'),callback_data:`capback:${String(ui.state.capability_category||'')}`}])
+    return {text,keyboard:{inline_keyboard:keyboard}}
   }
   if(screen==='field') return renderField(lang,group,settings,ui.edit_key,keyboard)
   const section=screen as Section
@@ -209,10 +271,11 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
   await tg('answerCallbackQuery',{callback_query_id:callbackId})
   const currentChat=group?.chat_id ?? null
   const lang=group ? langOf(group.language) : langOf(ui.language)
+  const eventToken=`panel-callback:${createHash('sha256').update(callbackId).digest('hex')}`
   const [action,a,b]=data.split(':')
   if(action==='noop') return
   if(action==='lang' && (a==='en'||a==='ru'||a==='zh'||a==='ar')) {
-    if(currentChat) await db.from('verif_groups').update({language:a,updated_at:new Date().toISOString()}).eq('chat_id',currentChat)
+    if(currentChat&&!await updatePanelLanguage(userId,currentChat,eventToken,a,lang)) return present(userId,'home',currentChat,undefined,{chatId:userId,messageId})
     await saveUi(userId,{language:a,edit_key:null})
     return present(userId,currentChat?'home':'groups',currentChat,undefined,{chatId:userId,messageId})
   }
@@ -220,7 +283,42 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
     if(a==='language') return present(userId,'language',currentChat,undefined,{chatId:userId,messageId})
     if(a==='groups') return present(userId,'groups',null,undefined,{chatId:userId,messageId})
     if(a==='home') return present(userId,'home',currentChat,undefined,{chatId:userId,messageId})
+    if(a==='capabilities') {
+      await setUiData(userId,{capability_category:null,capability_page:0,capability_id:null})
+      return present(userId,'capabilities',currentChat,undefined,{chatId:userId,messageId})
+    }
     if(['verification','moderation','community','keywords'].includes(a)) return present(userId,a as Section,currentChat,undefined,{chatId:userId,messageId})
+  }
+  if(action==='capcat' && currentChat) {
+    const category=CAPABILITY_CATEGORIES.find((item)=>item.id===a)
+    const page=Number(b)
+    if(category&&Number.isSafeInteger(page)&&page>=0) {
+      await setUiData(userId,{capability_category:category.id,capability_page:page,capability_id:null})
+      return present(userId,'capability-category',currentChat,undefined,{chatId:userId,messageId})
+    }
+  }
+  if(action==='cappage' && currentChat) {
+    const page=Number(a)
+    const current=await getUi(userId)
+    const category=CAPABILITY_CATEGORIES.find((item)=>item.id===current.state.capability_category)
+    if(category&&Number.isSafeInteger(page)&&page>=0) {
+      await setUiData(userId,{capability_page:page})
+      return present(userId,'capability-category',currentChat,undefined,{chatId:userId,messageId})
+    }
+  }
+  if(action==='capdetail' && currentChat) {
+    const capability=getCapability(a)
+    if(capability) {
+      await setUiData(userId,{capability_id:capability.id})
+      return present(userId,'capability-detail',currentChat,undefined,{chatId:userId,messageId})
+    }
+  }
+  if(action==='capback' && currentChat) {
+    const category=CAPABILITY_CATEGORIES.find((item)=>item.id===a)
+    if(category) {
+      await setUiData(userId,{capability_category:category.id})
+      return present(userId,'capability-category',currentChat,undefined,{chatId:userId,messageId})
+    }
   }
   if(action==='group') {
     const nextGroup=Number(a)
@@ -238,18 +336,18 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
   const field=fieldByKey(a)
   if(action==='toggle' && field && field.kind==='toggle') {
     const value=currentValue(settings,field)
-    await updateGroupSettings(currentChat,updateSetting(settings,field.key,!value))
+    await applyPanelSetting(userId,currentChat,eventToken,field.key,!value,lang)
     await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
   if(action==='step' && field && field.kind==='number') {
     const old=Number(currentValue(settings,field)); const step=field.step||1; const next=old+(b==='+'?step:-step)
-    await updateGroupSettings(currentChat,updateSetting(settings,field.key,Math.min(field.max||10000,Math.max(field.min||0,next))))
+    await applyPanelSetting(userId,currentChat,eventToken,field.key,Math.min(field.max||10000,Math.max(field.min||0,next)),lang)
     await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
   if(action==='choice' && field && field.kind==='choice' && field.choices?.includes(b)) {
-    await updateGroupSettings(currentChat,updateSetting(settings,field.key,b))
+    await applyPanelSetting(userId,currentChat,eventToken,field.key,b,lang)
     await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
@@ -260,7 +358,7 @@ export async function handlePanelCallback(userId:number,callbackId:string,messag
     return editMessage(userId,messageId,`${currentFieldView.text}\n\n${tr(lang,prompt as MessageKey)}`,{inline_keyboard:[[{text:tr(lang,'back'),callback_data:`field:${field.key}`}]]})
   }
   if(action==='reset' && field) {
-    await updateGroupSettings(currentChat,updateSetting(settings,field.key,(defaults.verification as Record<string,unknown>)[field.key]??(defaults.moderation as Record<string,unknown>)[field.key]))
+    await applyPanelSetting(userId,currentChat,eventToken,field.key,(defaults.verification as Record<string,unknown>)[field.key]??(defaults.moderation as Record<string,unknown>)[field.key],lang)
     await saveUi(userId,{edit_key:field.key})
     return present(userId,'field',currentChat,undefined,{chatId:userId,messageId})
   }
@@ -275,15 +373,15 @@ export async function handlePrivateText(userId:number,messageId:number,text:stri
   if(!group) return
   const field=fieldByKey(ui.edit_key)
   if(!field || !['text','longtext','keywords'].includes(field.kind)) { await saveUi(userId,{edit_key:null}); return }
-  const settings=groupSettings(group)
-  let value:unknown=text.trim().slice(0,field.key==='rules'?3000:800)
-  if(field.key==='keywords') value=String(value).split(/[\n,]/).map((item)=>item.trim()).filter(Boolean).slice(0,100)
+  const value:unknown=text.trim().slice(0,field.key==='rules'?3000:800)
+  const eventToken=`private-message:${userId}:${messageId}`
+  const lang=langOf(group.language)
   if(field.key==='join_chat_id' && value && !/^(@[A-Za-z0-9_]{5,}|-?\d{5,})$/.test(String(value))) {
     await present(userId,'field',ui.chat_id)
-    await tg('sendMessage',{chat_id:userId,text:tr(langOf(group.language),'invalid')})
+    await tg('sendMessage',{chat_id:userId,text:tr(lang,'invalid')})
     return
   }
-  await updateGroupSettings(ui.chat_id,updateSetting(settings,field.key,value))
+  await applyPanelSetting(userId,ui.chat_id,eventToken,field.key,value,lang)
   await saveUi(userId,{edit_key:field.key})
   await present(userId,'field',ui.chat_id)
 }
