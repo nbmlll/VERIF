@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-type SetupResult={ok:boolean;alreadySet?:boolean}
+type SetupResult={ok:boolean;alreadySet?:boolean;reason?:'production_only'|'webhook_conflict'}
 
 export function WebhookSetup() {
   const [busy,setBusy]=useState(false)
@@ -17,7 +17,17 @@ export function WebhookSetup() {
     try {
       const response=await fetch('/api/telegram/setup',{method:'POST'})
       const result=await response.json() as SetupResult
-      if(!response.ok||!result.ok) throw new Error('setup_failed')
+      if(!response.ok||!result.ok) {
+        if(result.reason==='production_only') {
+          setMessage('Webhook setup is available on the production deployment only.')
+          return
+        }
+        if(result.reason==='webhook_conflict') {
+          setMessage('A different webhook is already configured. It was left unchanged.')
+          return
+        }
+        throw new Error('setup_failed')
+      }
       setSuccess(true)
       setMessage(result.alreadySet?'Webhook is already configured.':'Webhook configured successfully.')
     } catch {
