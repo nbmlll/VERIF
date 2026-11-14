@@ -38,13 +38,15 @@ export function WebhookSetup() {
   }
 
   return (
-    <div className="flex w-full max-w-xl flex-col gap-3 rounded-2xl border border-foreground/10 bg-surface p-4 sm:flex-row sm:items-center">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <p className="font-semibold">Telegram webhook</p>
-        <p className="text-sm leading-relaxed text-muted">Configure it using the server-side bot credentials. Secrets stay in project environment variables.</p>
+    <div className="flex w-full max-w-xl flex-col gap-3 rounded-2xl border border-foreground/10 bg-surface p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="font-semibold">Telegram webhook</p>
+          <p className="text-sm leading-relaxed text-muted">Configure it using the server-side bot credentials. Secrets stay in project environment variables.</p>
+        </div>
+        <button type="button" onClick={setupWebhook} disabled={busy} className="min-h-11 self-start rounded-lg bg-brand px-4 font-semibold text-surface disabled:cursor-wait disabled:opacity-60 sm:self-auto">{busy?'Setting webhook…':'Set webhook'}</button>
       </div>
-      <button type="button" onClick={setupWebhook} disabled={busy} className="min-h-11 rounded-lg bg-brand px-4 font-semibold text-surface disabled:cursor-wait disabled:opacity-60">{busy?'Setting webhook…':'Set webhook'}</button>
-      <p role="status" aria-live="polite" className={`text-sm leading-relaxed sm:basis-full ${success?'text-brand':'text-muted'}`}>{message}</p>
+      <p role="status" aria-live="polite" className={`text-sm leading-relaxed ${success?'text-brand':'text-muted'}`}>{message}</p>
     </div>
   )
 }
